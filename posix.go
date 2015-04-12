@@ -1,11 +1,13 @@
 package posix
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"syscall"
+	"unicode/utf8"
 )
 
 type Getter interface {
@@ -52,155 +54,329 @@ func (e environGetSetter) Set(k, v string) error {
 
 var osEnviron environGetSetter = environGetSetter{}
 
-// Expand replaces ${var} or $var in the string based on the mapping function.
-// For example, os.ExpandEnv(s) is equivalent to os.Expand(s, os.Getenv).
+// Expand replaces ${var} or $var in the string based on the mapping.
 func Expand(s string, mapping Getter) (string, error) {
-	buf := make([]byte, 0, 2*len(s))
-	// ${} is all ASCII, so bytes are fine for this operation.
-	i := 0
-	for j := 0; j < len(s); j++ {
-		if s[j] == '$' && j+1 < len(s) {
-			buf = append(buf, s[i:j]...)
-			name, w := getShellName(s[j+1:])
-			sub, err := subShellName(mapping, name)
-			if err != nil {
-				return "", err
-			}
-			buf = append(buf, sub...)
-			j += w
-			i = j + 1
-		}
-	}
-	return string(buf) + s[i:], nil
+	return lex(s, mapping)
 }
 
 func ExpandEnv(s string) (string, error) {
 	return Expand(s, osEnviron)
 }
 
-// getName returns the name that begins the string and the number of bytes
-// consumed to extract it.  If the name is enclosed in {}, it's part of a ${}
-// expansion and two more bytes are needed than the length of the name.
-func getShellName(s string) (string, int) {
-	switch {
-	case s[0] == '{':
-		if len(s) > 2 && isShellSpecialVar(s[1]) && s[2] == '}' {
-			return s[1:2], 3
-		}
-		// Scan to closing brace
-		depth := 1
-		for i := 1; i < len(s); i++ {
-			switch s[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-			}
-			if depth == 0 {
-				return s[1:i], i + 1
-			}
-		}
-		return "", 1 // Bad syntax; just eat the brace.
-	case isShellSpecialVar(s[0]):
-		return s[0:1], 1
-	}
-	// Scan alphanumerics.
-	var i int
-	for i = 0; i < len(s) && isAlphaNum(s[i]); i++ {
-	}
-	return s[:i], i
+type stateFn func(*lexer) stateFn
+
+type Pos int
+
+type lexer struct {
+	mapping Getter
+	items   chan item
+	input   string
+	state   stateFn
+	pos     Pos
+	start   Pos
+	width   Pos
+	depth   int
 }
 
-func subShellName(mapping Getter, s string) (string, error) {
-	parameter, op, word := splitShellName(s)
-	paramVal, paramSet := mapping.Get(parameter)
-	if op == "" {
-		return paramVal, nil
-	} else if op == "len" {
-		return strconv.Itoa(len(paramVal)), nil
-	}
-	fallback := !paramSet || (op[0] == ':' && paramVal == "")
-	opCode := op[len(op)-1]
+type item interface {
+	Eval(mapping Getter, stream chan item) (string, error)
+}
 
-	if opCode == '+' {
-		if fallback {
-			return "", nil
-		} else {
-			return Expand(word, mapping)
+type itemEndBracket struct{}
+
+func (x itemEndBracket) Eval(mapping Getter, stream chan item) (string, error) {
+	return "", nil
+}
+
+var endBracket itemEndBracket
+
+type itemText string
+
+func (p itemText) Eval(mapping Getter, stream chan item) (string, error) {
+	return string(p), nil
+}
+
+type itemReadParam string
+
+func (p itemReadParam) Eval(mapping Getter, stream chan item) (string, error) {
+	v, _ := mapping.Get(string(p))
+	return v, nil
+}
+
+type itemParamLen string
+
+func (p itemParamLen) Eval(mapping Getter, stream chan item) (string, error) {
+	v, _ := mapping.Get(string(p))
+	return strconv.Itoa(len(v)), nil
+}
+
+type itemParamOp struct {
+	parameter   string
+	op          rune
+	nullIsEmpty bool
+}
+
+func (p itemParamOp) Eval(mapping Getter, stream chan item) (string, error) {
+	paramVal, paramSet := mapping.Get(p.parameter)
+	if p.nullIsEmpty {
+		paramSet = paramVal != ""
+	}
+
+	if p.op == '+' {
+		if paramSet {
+			return evalStream(mapping, stream)
 		}
+		skipStream(stream)
+		return "", nil
 	}
 
-	if !fallback {
+	if paramSet {
+		skipStream(stream)
 		return paramVal, nil
 	}
 
-	if opCode == '?' && word == "" {
-		return "", fmt.Errorf("%s: parameter null or not set", parameter)
-	}
-
-	word, err := Expand(word, mapping)
+	val, err := evalStream(mapping, stream)
 	if err != nil {
 		return "", err
 	}
 
-	switch opCode {
+	switch p.op {
 	case '-':
-		return word, nil
-	case '?':
-		return "", errors.New(word)
+		return val, nil
 	case '=':
 		if setter, ok := mapping.(Setter); ok {
-			err := setter.Set(parameter, word)
+			err := setter.Set(p.parameter, val)
 			if err != nil {
 				return "", err
 			}
-			return word, nil
+			return val, nil
 		} else {
-			return "", fmt.Errorf("mapping type %T does not support assignment for %#v", mapping, parameter)
+			// XXX
+			return "", errors.New("setting not supported")
 		}
+	case '?':
+		if val == "" {
+			val = fmt.Sprintf("%s: parameter null or not set", p.parameter)
+		}
+		return "", errors.New(val)
 	}
 
-	return "", fmt.Errorf("unexpected op %s", opCode)
+	return "", fmt.Errorf("unexpected op: %s", p.op)
 }
 
-func splitShellName(s string) (string, string, string) {
-	// TODO len(s) == 0?
-	if s[0] == '#' {
-		return s[1:], "len", ""
+func evalStream(mapping Getter, stream chan item) (string, error) {
+	var buf bytes.Buffer
+
+	for item := range stream {
+		if _, ok := item.(itemEndBracket); ok {
+			break
+		}
+		text, err := item.Eval(mapping, stream)
+		if err != nil {
+			return "", err
+		}
+		buf.WriteString(text)
 	}
 
-	// FIXME what if string starts with an op, e.g. param name is empty?
-	for i := 1; i < len(s); i++ {
-		if isSubOp(s[i]) {
-			j := 0
-			if s[i-1] == ':' {
-				j = 1
+	return buf.String(), nil
+}
+
+func skipStream(stream chan item) {
+	for item := range stream {
+		if _, ok := item.(itemEndBracket); ok {
+			break
+		}
+	}
+}
+
+func lex(s string, mapping Getter) (string, error) {
+	l := &lexer{
+		mapping: mapping,
+		items:   make(chan item),
+		input:   s,
+	}
+	go l.run()
+	val, err := evalStream(mapping, l.items)
+	skipStream(l.items)
+	return val, err
+}
+
+const eof = -1
+
+// next returns the next rune in the input.
+func (l *lexer) next() rune {
+	if int(l.pos) >= len(l.input) {
+		l.width = 0
+		return eof
+	}
+	r, w := utf8.DecodeRuneInString(l.input[l.pos:])
+	l.width = Pos(w)
+	l.pos += l.width
+	return r
+}
+
+// peek returns but does not consume the next rune in the input.
+func (l *lexer) peek() rune {
+	r := l.next()
+	l.backup()
+	return r
+}
+
+// backup steps back one rune. Can only be called once per call of next.
+func (l *lexer) backup() {
+	l.pos -= l.width
+}
+
+// emit passes an item back to the client.
+func (l *lexer) emitToken() {
+	if l.pos > l.start {
+		l.emitText(l.token())
+		l.start = l.pos
+	}
+}
+
+func (l *lexer) token() string {
+	return l.input[l.start:l.pos]
+}
+
+func (l *lexer) emitText(item string) {
+	l.items <- itemText(item)
+}
+
+func (l *lexer) emit(item item) {
+	l.items <- item
+}
+
+// ignore skips over the pending input before this point.
+func (l *lexer) ignore() {
+	l.start = l.pos
+}
+
+func (l *lexer) run() {
+	for l.state = lexText; l.state != nil; {
+		l.state = l.state(l)
+	}
+	close(l.items)
+}
+
+func lexText(l *lexer) stateFn {
+	for {
+		switch l.next() {
+		case eof:
+			l.emitToken()
+			return nil
+		case '}':
+			if l.depth > 0 {
+				l.backup()
+				l.emitToken()
+				l.next()
+				l.emit(endBracket)
+				return lexEndBracket
 			}
-			return s[:i-j], s[i-j : i+1], s[i+1:]
+		case '$':
+			l.backup()
+			l.emitToken()
+			l.next()
+			l.ignore()
+			return lexStartExpansion
 		}
 	}
-	return s, "", ""
 }
 
-func isSubOp(c uint8) bool {
-	switch c {
-	case '-', '?', '+', '=':
-		return true
+func lexStartExpansion(l *lexer) stateFn {
+	c := l.next()
+	switch {
+	case c == eof:
+	case c == '{':
+		l.ignore()
+		l.depth++
+		return lexBracketName
+	case isAlpha(c):
+		return lexSimpleName
 	}
-	return false
+	return nil // FIXME
 }
 
-// isSpellSpecialVar reports whether the character identifies a special
-// shell variable such as $*.
-func isShellSpecialVar(c uint8) bool {
-	switch c {
-	case '*', '#', '$', '@', '!', '?', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-		return true
+func lexEndBracket(l *lexer) stateFn {
+	l.depth--
+	l.ignore()
+	return lexText
+}
+
+func lexSimpleName(l *lexer) stateFn {
+	for {
+		if !isAlphaNum(l.next()) {
+			l.backup()
+			name := l.token()
+			l.emit(itemReadParam(name))
+			l.ignore()
+			return lexText
+		}
 	}
-	return false
+}
+
+func lexBracketName(l *lexer) stateFn {
+	if l.peek() == '#' {
+		return lexParamLength
+	}
+	for {
+		switch l.next() {
+		// FIXME what if ':' is not followed by an op?
+		case '}', ':', '-', '?', '+', '=':
+			l.backup()
+			return lexParamOp
+		}
+	}
+}
+
+func lexParamLength(l *lexer) stateFn {
+	// ignore the leading '#'
+	l.next()
+	l.ignore()
+
+	for {
+		switch l.next() {
+		case '}':
+			l.backup()
+			name := l.token()
+			l.emit(itemParamLen(name))
+			l.next()
+			l.ignore()
+			return lexEndBracket
+		}
+	}
+}
+
+func lexParamOp(l *lexer) stateFn {
+	paramName := l.token()
+
+	op := l.next()
+	if op == '}' {
+		l.emit(itemReadParam(paramName))
+		return lexEndBracket
+	}
+
+	nullIsEmpty := op == ':'
+	if nullIsEmpty {
+		op = l.next()
+	}
+	l.ignore()
+
+	l.emit(itemParamOp{paramName, op, nullIsEmpty})
+	return lexText
+}
+
+// isAlpha reports whether the byte is an ASCII letter or underscore
+func isAlpha(c rune) bool {
+	return c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}
+
+// isNum reports whether the byte is an ASCII number
+func isNum(c rune) bool {
+	return '0' <= c && c <= '9'
 }
 
 // isAlphaNum reports whether the byte is an ASCII letter, number, or underscore
-func isAlphaNum(c uint8) bool {
-	return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+func isAlphaNum(c rune) bool {
+	return isAlpha(c) || isNum(c)
 }

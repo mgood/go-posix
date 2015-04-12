@@ -35,18 +35,6 @@ func equals(tb testing.TB, exp, act interface{}) {
 	}
 }
 
-func TestGetShellName(t *testing.T) {
-	val, _ := getShellName("{foo-bar}")
-	equals(t, "foo-bar", val)
-}
-
-func TestSplitShellName(t *testing.T) {
-	parameter, op, word := splitShellName("foo-bar")
-	equals(t, "foo", parameter)
-	equals(t, "-", op)
-	equals(t, "bar", word)
-}
-
 var paramtests = []struct {
 	in  string
 	out string
@@ -99,8 +87,13 @@ var paramtests = []struct {
 	{"${null=word}", "", ""},
 
 	// Recursive
+	{"foo}bar", "foo}bar", ""},
+
 	{"${null:-${set2}}", "yes-two", ""},
 	{"${unset:-${set2}}", "yes-two", ""},
+
+	{"a ${set:-b ${set2} c} d", "a yes d", ""},
+	{"a ${null:-b ${set2} c} d", "a b yes-two c d", ""},
 
 	{"${unset-${set2}}", "yes-two", ""},
 
