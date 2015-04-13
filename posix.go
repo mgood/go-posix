@@ -56,9 +56,9 @@ func (m RWMap) Set(k, v string) error {
 //
 // See: http://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html
 func Expand(s string, mapping Getter) (string, error) {
-	stream := lex(s)
-	val, err := evalStream(mapping, stream)
-	skipStream(stream)
+	lexer := lex(s)
+	val, err := evalStream(mapping, lexer.stream)
+	lexer.Close()
 	return val, err
 }
 

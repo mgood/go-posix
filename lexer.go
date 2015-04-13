@@ -14,7 +14,7 @@ type stateFn func(*lexer) stateFn
 type Pos int
 
 type lexer struct {
-	items        chan item
+	stream       chan item
 	input        string
 	state        stateFn
 	pos          Pos
@@ -22,6 +22,7 @@ type lexer struct {
 	width        Pos
 	depth        int
 	doubleQuotes bool
+	closed       chan struct{}
 }
 
 type item interface {
@@ -158,13 +159,14 @@ func skipStream(stream chan item) {
 	}
 }
 
-func lex(s string) chan item {
+func lex(s string) *lexer {
 	l := &lexer{
-		items: make(chan item),
-		input: s,
+		stream: make(chan item),
+		closed: make(chan struct{}),
+		input:  s,
 	}
 	go l.run()
-	return l.items
+	return l
 }
 
 const eof = -1
@@ -201,7 +203,7 @@ func (l *lexer) token() string {
 }
 
 func (l *lexer) emit(item item) {
-	l.items <- item
+	l.stream <- item
 }
 
 // ignore skips over the pending input before this point.
@@ -210,10 +212,20 @@ func (l *lexer) ignore() {
 }
 
 func (l *lexer) run() {
+	defer close(l.stream)
 	for l.state = lexText; l.state != nil; {
+		select {
+		case <-l.closed:
+			return
+		default:
+		}
 		l.state = l.state(l)
 	}
-	close(l.items)
+}
+
+func (l *lexer) Close() {
+	close(l.closed)
+	skipStream(l.stream)
 }
 
 func lexText(l *lexer) stateFn {
