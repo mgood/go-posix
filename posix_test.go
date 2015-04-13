@@ -158,7 +158,7 @@ func TestExand_assignReadOnlyFunc(t *testing.T) {
 func TestExand_assignReadOnlyMap(t *testing.T) {
 	_, err := Expand("${unset:=word}", Map(nil))
 	if err == nil {
-		t.Fatal("assignment on read-only function should return an error")
+		t.Fatal("assignment on read-only map should return an error")
 	}
 }
 
