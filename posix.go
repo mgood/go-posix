@@ -124,18 +124,18 @@ func (p itemParamOp) Eval(mapping Getter, stream chan item) (string, error) {
 
 	if p.op == '+' {
 		if paramSet {
-			return evalStream(mapping, stream)
+			return evalStream(mapping, bracketedStream(stream))
 		}
 		skipStream(stream)
 		return "", nil
 	}
 
 	if paramSet {
-		skipStream(stream)
+		skipStream(bracketedStream(stream))
 		return paramVal, nil
 	}
 
-	val, err := evalStream(mapping, stream)
+	val, err := evalStream(mapping, bracketedStream(stream))
 	if err != nil {
 		return "", err
 	}
@@ -150,10 +150,9 @@ func (p itemParamOp) Eval(mapping Getter, stream chan item) (string, error) {
 				return "", err
 			}
 			return val, nil
-		} else {
-			// XXX
-			return "", errors.New("setting not supported")
 		}
+		// XXX
+		return "", errors.New("setting not supported")
 	case '?':
 		if val == "" {
 			val = fmt.Sprintf("%s: parameter null or not set", p.parameter)
@@ -168,9 +167,6 @@ func evalStream(mapping Getter, stream chan item) (string, error) {
 	var buf bytes.Buffer
 
 	for item := range stream {
-		if _, ok := item.(itemEndBracket); ok {
-			break
-		}
 		text, err := item.Eval(mapping, stream)
 		if err != nil {
 			return "", err
@@ -181,11 +177,29 @@ func evalStream(mapping Getter, stream chan item) (string, error) {
 	return buf.String(), nil
 }
 
-func skipStream(stream chan item) {
-	for item := range stream {
-		if _, ok := item.(itemEndBracket); ok {
-			break
+type itemUnexpectedEOF rune
+
+func (i itemUnexpectedEOF) Eval(mapping Getter, stream chan item) (string, error) {
+	return "", fmt.Errorf("unexpected EOF while looking for matching `%c'", i)
+}
+
+func bracketedStream(stream chan item) chan item {
+	c := make(chan item)
+	go func() {
+		for item := range stream {
+			if _, ok := item.(itemEndBracket); ok {
+				close(c)
+				return
+			}
+			c <- item
 		}
+		c <- itemUnexpectedEOF('}')
+	}()
+	return c
+}
+
+func skipStream(stream chan item) {
+	for _ = range stream {
 	}
 }
 
@@ -215,32 +229,23 @@ func (l *lexer) next() rune {
 	return r
 }
 
-// peek returns but does not consume the next rune in the input.
-func (l *lexer) peek() rune {
-	r := l.next()
-	l.backup()
-	return r
-}
-
 // backup steps back one rune. Can only be called once per call of next.
 func (l *lexer) backup() {
 	l.pos -= l.width
 }
 
-// emit passes an item back to the client.
-func (l *lexer) emitToken() {
+func (l *lexer) emitLastToken() {
+	l.backup()
 	if l.pos > l.start {
-		l.emitText(l.token())
+		l.emit(itemText(l.token()))
 		l.start = l.pos
 	}
+	l.next()
+	l.ignore()
 }
 
 func (l *lexer) token() string {
 	return l.input[l.start:l.pos]
-}
-
-func (l *lexer) emitText(item string) {
-	l.items <- itemText(item)
 }
 
 func (l *lexer) emit(item item) {
@@ -263,22 +268,36 @@ func lexText(l *lexer) stateFn {
 	for {
 		switch l.next() {
 		case eof:
-			l.emitToken()
+			l.emitLastToken()
 			return nil
 		case '}':
 			if l.depth > 0 {
-				l.backup()
-				l.emitToken()
-				l.next()
+				l.emitLastToken()
 				l.emit(endBracket)
 				return lexEndBracket
 			}
 		case '$':
-			l.backup()
-			l.emitToken()
-			l.next()
-			l.ignore()
+			l.emitLastToken()
 			return lexStartExpansion
+		case '\'':
+			l.emitLastToken()
+			return lexSingleQuoteString
+		case '\\':
+			l.emitLastToken()
+			l.next()
+		}
+	}
+}
+
+func lexSingleQuoteString(l *lexer) stateFn {
+	for {
+		switch l.next() {
+		case eof:
+			l.emit(itemUnexpectedEOF('\''))
+			return nil
+		case '\'':
+			l.emitLastToken()
+			return lexText
 		}
 	}
 }
@@ -287,6 +306,8 @@ func lexStartExpansion(l *lexer) stateFn {
 	c := l.next()
 	switch {
 	case c == eof:
+		l.emit(itemText("$"))
+		return nil
 	case c == '{':
 		l.ignore()
 		l.depth++
@@ -316,33 +337,20 @@ func lexSimpleName(l *lexer) stateFn {
 }
 
 func lexBracketName(l *lexer) stateFn {
-	if l.peek() == '#' {
+	if l.next() == '#' {
+		l.ignore()
 		return lexParamLength
 	}
+	l.backup()
 	for {
 		switch l.next() {
+		case eof:
+			l.emit(itemUnexpectedEOF('}'))
+			return nil
 		// FIXME what if ':' is not followed by an op?
 		case '}', ':', '-', '?', '+', '=':
 			l.backup()
 			return lexParamOp
-		}
-	}
-}
-
-func lexParamLength(l *lexer) stateFn {
-	// ignore the leading '#'
-	l.next()
-	l.ignore()
-
-	for {
-		switch l.next() {
-		case '}':
-			l.backup()
-			name := l.token()
-			l.emit(itemParamLen(name))
-			l.next()
-			l.ignore()
-			return lexEndBracket
 		}
 	}
 }
@@ -364,6 +372,23 @@ func lexParamOp(l *lexer) stateFn {
 
 	l.emit(itemParamOp{paramName, op, nullIsEmpty})
 	return lexText
+}
+
+func lexParamLength(l *lexer) stateFn {
+	for {
+		switch l.next() {
+		case eof:
+			l.emit(itemUnexpectedEOF('}'))
+			return nil
+		case '}':
+			l.backup()
+			name := l.token()
+			l.emit(itemParamLen(name))
+			l.next()
+			l.ignore()
+			return lexEndBracket
+		}
+	}
 }
 
 // isAlpha reports whether the byte is an ASCII letter or underscore

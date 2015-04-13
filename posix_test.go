@@ -109,6 +109,19 @@ var paramtests = []struct {
 
 	// Length
 	{"${#set}", "3", ""},
+
+	// Quoting
+	{"'${foo}'", "${foo}", ""},
+	{"\\$foo", "$foo", ""},
+
+	// Bad syntax
+	{"${", "", "unexpected EOF while looking for matching `}'"},
+	{"${foo", "", "unexpected EOF while looking for matching `}'"},
+	{"${foo-", "", "unexpected EOF while looking for matching `}'"},
+	{"${#foo", "", "unexpected EOF while looking for matching `}'"},
+	{"'foo", "", "unexpected EOF while looking for matching `''"},
+
+	{"foo$", "foo$", ""},
 }
 
 func TestExpand_simple(t *testing.T) {
