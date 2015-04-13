@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -13,13 +14,14 @@ type stateFn func(*lexer) stateFn
 type Pos int
 
 type lexer struct {
-	items chan item
-	input string
-	state stateFn
-	pos   Pos
-	start Pos
-	width Pos
-	depth int
+	items        chan item
+	input        string
+	state        stateFn
+	pos          Pos
+	start        Pos
+	width        Pos
+	depth        int
+	doubleQuotes bool
 }
 
 type item interface {
@@ -234,7 +236,13 @@ func lexText(l *lexer) stateFn {
 			return lexSingleQuoteString
 		case '\\':
 			l.emitLastToken()
-			l.next()
+			c := l.next()
+			if l.doubleQuotes && strings.IndexRune("$`\"\\", c) < 0 {
+				l.emit(itemText("\\"))
+			}
+		case '"':
+			l.emitLastToken()
+			l.doubleQuotes = !l.doubleQuotes
 		}
 	}
 }

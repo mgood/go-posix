@@ -112,7 +112,21 @@ var paramtests = []struct {
 
 	// Quoting
 	{"'${foo}'", "${foo}", ""},
-	{"\\$foo", "$foo", ""},
+	{`\$foo`, "$foo", ""},
+	{`\'`, "'", ""},
+	{`\f`, `f`, ""},
+
+	// in double-quotes, backslash escape applies to: $ " \ `
+	{`"\$"`, `$`, ""},
+	{`"\""`, `"`, ""},
+	{`"\\"`, `\`, ""},
+	{"\"\\`\"", "`", ""},
+
+	// in double-quotes, backslash escape does not apply to other characters:
+	{`"\a\b\c"`, `\a\b\c`, ""},
+
+	// parameters are evaluated inside double-quotes
+	{`a "b ${set} c" d`, "a b yes c d", ""},
 
 	// Bad syntax
 	{"${", "", "unexpected EOF while looking for matching `}'"},
