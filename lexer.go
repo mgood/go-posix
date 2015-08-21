@@ -244,17 +244,21 @@ func lexText(l *lexer) stateFn {
 			l.emitLastToken()
 			return lexStartExpansion
 		case '\'':
-			l.emitLastToken()
-			return lexSingleQuoteString
+			if l.depth > 0 {
+				l.emitLastToken()
+				return lexSingleQuoteString
+			}
 		case '\\':
 			l.emitLastToken()
 			c := l.next()
-			if l.doubleQuotes && strings.IndexRune("$`\"\\", c) < 0 {
+			if (l.depth == 0 && c != '$') || (l.doubleQuotes && strings.IndexRune("$`\"\\", c) < 0) {
 				l.emit(itemText("\\"))
 			}
 		case '"':
-			l.emitLastToken()
-			l.doubleQuotes = !l.doubleQuotes
+			if l.depth > 0 {
+				l.emitLastToken()
+				l.doubleQuotes = !l.doubleQuotes
+			}
 		}
 	}
 }

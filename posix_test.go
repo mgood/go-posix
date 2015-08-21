@@ -45,6 +45,10 @@ var paramtests = []struct {
 	{"${null}", "", ""},
 	{"${unset}", "", ""},
 
+	// Names, no brackets
+	{"$set", "yes", ""},
+	{"$set$set2", "yesyes-two", ""},
+
 	// Default
 	{"${set:-word}", "yes", ""},
 	{"${null:-word}", "word", ""},
@@ -111,29 +115,41 @@ var paramtests = []struct {
 	{"${#set}", "3", ""},
 
 	// Quoting
-	{"'${foo}'", "${foo}", ""},
-	{`\$foo`, "$foo", ""},
-	{`\'`, "'", ""},
-	{`\f`, `f`, ""},
+	// backslash outside expansion only applies to $
+	{`\"`, `\"`, ""},
+	{`\$foo`, `$foo`, ""},
+
+	// quotes outside expansion are unchanged
+	{`"foo"`, `"foo"`, ""},
+	{`"foo`, `"foo`, ""},
+	{`'foo'`, `'foo'`, ""},
+	{`'foo`, `'foo`, ""},
+	{`"$set"`, `"yes"`, ""},
+
+	// backslash or quotes inside expansion are applied
+	{"${unset-'${foo}'}", "${foo}", ""},
+	{`${unset-\$foo}`, "$foo", ""},
+	{`${unset-\'}`, "'", ""},
+	{`${unset-\f}`, `f`, ""},
 
 	// in double-quotes, backslash escape applies to: $ " \ `
-	{`"\$"`, `$`, ""},
-	{`"\""`, `"`, ""},
-	{`"\\"`, `\`, ""},
-	{"\"\\`\"", "`", ""},
+	{`${unset-"\$"}`, `$`, ""},
+	{`${unset-"\""}`, `"`, ""},
+	{`${unset-"\\"}`, `\`, ""},
+	{"${unset-\"\\`\"}", "`", ""},
 
 	// in double-quotes, backslash escape does not apply to other characters:
-	{`"\a\b\c"`, `\a\b\c`, ""},
+	{`${unset-"\a\b\c"}`, `\a\b\c`, ""},
 
 	// parameters are evaluated inside double-quotes
-	{`a "b ${set} c" d`, "a b yes c d", ""},
+	{`${unset-a "b ${set} c" d}`, "a b yes c d", ""},
 
 	// Bad syntax
 	{"${", "", "unexpected EOF while looking for matching `}'"},
 	{"${foo", "", "unexpected EOF while looking for matching `}'"},
 	{"${foo-", "", "unexpected EOF while looking for matching `}'"},
 	{"${#foo", "", "unexpected EOF while looking for matching `}'"},
-	{"'foo", "", "unexpected EOF while looking for matching `''"},
+	{"${unset-'foo", "", "unexpected EOF while looking for matching `''"},
 
 	{"foo$", "foo$", ""},
 }
