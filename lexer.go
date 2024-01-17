@@ -286,7 +286,7 @@ func lexStartExpansion(l *lexer) stateFn {
 		l.ignore()
 		l.depth++
 		return lexBracketName
-	case isAlpha(c):
+	case isAlphaNum(c):
 		return lexSimpleName
 	}
 	return nil // FIXME

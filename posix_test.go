@@ -206,3 +206,28 @@ func TestExpand_assign(t *testing.T) {
 	equals(t, "word", x)
 	equals(t, map[string]string{"unset": "word"}, mapping)
 }
+
+func TestExpand_shellPositionalArg(t *testing.T) {
+	mapping := map[string]string{
+		"1": "foo",
+		"2": "bar",
+	}
+
+	params := []struct {
+		in  string
+		out string
+	}{
+		{"$1$2", "foobar"},
+		{"/home/$1/$2", "/home/foo/bar"},
+	}
+
+	for _, tt := range params {
+		x, err := Expand(tt.in, Map(mapping))
+		if err != nil {
+			t.Errorf("pattern %#v should not have produced an error, but got: %s", tt.in, err)
+		}
+		if x != tt.out {
+			t.Errorf("pattern %#v should expand to %#v, but got %#v", tt.in, tt.out, x)
+		}
+	}
+}
