@@ -35,10 +35,12 @@ var paramtests = []struct {
 	{"${set}", "yes", ""},
 	{"${null}", "", ""},
 	{"${unset}", "", ""},
+	{"${1}X${2}", "oneXtwo", ""},
 
 	// Names, no brackets
 	{"$set", "yes", ""},
 	{"$set$set2", "yesyes-two", ""},
+	// {"$1X$2", "oneXtwo", ""}, // TODO(#3) parse numeric simple names
 
 	// Default
 	{"${set:-word}", "yes", ""},
@@ -150,6 +152,8 @@ func TestExpand_simple(t *testing.T) {
 		"set":  "yes",
 		"set2": "yes-two",
 		"null": "",
+		"1":    "one",
+		"2":    "two",
 	}
 
 	for _, tt := range paramtests {
