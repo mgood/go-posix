@@ -116,7 +116,7 @@ func (p itemParamOp) Eval(mapping Getter, stream chan item) (string, error) {
 		return "", errors.New(val)
 	}
 
-	return "", fmt.Errorf("unexpected op: %s", p.op)
+	return "", fmt.Errorf("unexpected op: %q", p.op)
 }
 
 // Returns the evaluation of the stream items against the given mapping.
@@ -155,7 +155,7 @@ func bracketedStream(stream chan item) chan item {
 
 // Consumes the remaining items in the stream
 func skipStream(stream chan item) {
-	for _ = range stream {
+	for range stream {
 	}
 }
 
@@ -251,7 +251,7 @@ func lexText(l *lexer) stateFn {
 		case '\\':
 			l.emitLastToken()
 			c := l.next()
-			if (l.depth == 0 && c != '$') || (l.doubleQuotes && strings.IndexRune("$`\"\\", c) < 0) {
+			if (l.depth == 0 && c != '$') || (l.doubleQuotes && !strings.ContainsRune("$`\"\\", c)) {
 				l.emit(itemText("\\"))
 			}
 		case '"':
