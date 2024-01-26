@@ -156,8 +156,8 @@ func TestExpand_simple(t *testing.T) {
 		"null": "",
 		"1":    "one",
 		"2":    "two",
-		"11":    "eleven",
-		"22":    "twenty-two",
+		"11":   "eleven",
+		"22":   "twenty-two",
 	}
 
 	for _, tt := range paramtests {
@@ -175,7 +175,7 @@ func TestExpand_simple(t *testing.T) {
 	}
 }
 
-func TestExand_assignReadOnlyFunc(t *testing.T) {
+func TestExpand_assignReadOnlyFunc(t *testing.T) {
 	_, err := Expand("${unset:=word}", Func(func(s string) string {
 		return ""
 	}))
@@ -184,7 +184,7 @@ func TestExand_assignReadOnlyFunc(t *testing.T) {
 	}
 }
 
-func TestExand_assignReadOnlyMap(t *testing.T) {
+func TestExpand_assignReadOnlyMap(t *testing.T) {
 	_, err := Expand("${unset:=word}", Map(nil))
 	if err == nil {
 		t.Fatal("assignment on read-only map should return an error")
