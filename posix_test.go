@@ -36,11 +36,13 @@ var paramtests = []struct {
 	{"${null}", "", ""},
 	{"${unset}", "", ""},
 	{"${1}X${2}", "oneXtwo", ""},
+	{"${11}X${22}", "elevenXtwenty-two", ""},
 
 	// Names, no brackets
 	{"$set", "yes", ""},
 	{"$set$set2", "yesyes-two", ""},
-	// {"$1X$2", "oneXtwo", ""}, // TODO(#3) parse numeric simple names
+	{"$1X$2", "oneXtwo", ""},
+	{"$11X$22", "elevenXtwenty-two", ""},
 
 	// Default
 	{"${set:-word}", "yes", ""},
@@ -154,6 +156,8 @@ func TestExpand_simple(t *testing.T) {
 		"null": "",
 		"1":    "one",
 		"2":    "two",
+		"11":   "eleven",
+		"22":   "twenty-two",
 	}
 
 	for _, tt := range paramtests {
@@ -171,7 +175,7 @@ func TestExpand_simple(t *testing.T) {
 	}
 }
 
-func TestExand_assignReadOnlyFunc(t *testing.T) {
+func TestExpand_assignReadOnlyFunc(t *testing.T) {
 	_, err := Expand("${unset:=word}", Func(func(s string) string {
 		return ""
 	}))
@@ -180,7 +184,7 @@ func TestExand_assignReadOnlyFunc(t *testing.T) {
 	}
 }
 
-func TestExand_assignReadOnlyMap(t *testing.T) {
+func TestExpand_assignReadOnlyMap(t *testing.T) {
 	_, err := Expand("${unset:=word}", Map(nil))
 	if err == nil {
 		t.Fatal("assignment on read-only map should return an error")
