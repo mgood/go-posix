@@ -36,11 +36,13 @@ var paramtests = []struct {
 	{"${null}", "", ""},
 	{"${unset}", "", ""},
 	{"${1}X${2}", "oneXtwo", ""},
+	{"${11}X${22}", "elevenXtwenty-two", ""},
 
 	// Names, no brackets
 	{"$set", "yes", ""},
 	{"$set$set2", "yesyes-two", ""},
-	// {"$1X$2", "oneXtwo", ""}, // TODO(#3) parse numeric simple names
+	{"$1X$2", "oneXtwo", ""},
+	{"$11X$22", "elevenXtwenty-two", ""},
 
 	// Default
 	{"${set:-word}", "yes", ""},
@@ -154,6 +156,8 @@ func TestExpand_simple(t *testing.T) {
 		"null": "",
 		"1":    "one",
 		"2":    "two",
+		"11":    "eleven",
+		"22":    "twenty-two",
 	}
 
 	for _, tt := range paramtests {
@@ -205,29 +209,4 @@ func TestExpand_assign(t *testing.T) {
 	ok(t, err)
 	equals(t, "word", x)
 	equals(t, map[string]string{"unset": "word"}, mapping)
-}
-
-func TestExpand_shellPositionalArg(t *testing.T) {
-	mapping := map[string]string{
-		"1": "foo",
-		"2": "bar",
-	}
-
-	params := []struct {
-		in  string
-		out string
-	}{
-		{"$1$2", "foobar"},
-		{"/home/$1/$2", "/home/foo/bar"},
-	}
-
-	for _, tt := range params {
-		x, err := Expand(tt.in, Map(mapping))
-		if err != nil {
-			t.Errorf("pattern %#v should not have produced an error, but got: %s", tt.in, err)
-		}
-		if x != tt.out {
-			t.Errorf("pattern %#v should expand to %#v, but got %#v", tt.in, tt.out, x)
-		}
-	}
 }

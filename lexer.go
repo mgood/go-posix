@@ -286,8 +286,10 @@ func lexStartExpansion(l *lexer) stateFn {
 		l.ignore()
 		l.depth++
 		return lexBracketName
-	case isAlphaNum(c):
+	case isAlpha(c):
 		return lexSimpleName
+	case isNum(c):
+		return lexNumberName
 	}
 	return nil // FIXME
 }
@@ -301,6 +303,18 @@ func lexEndBracket(l *lexer) stateFn {
 func lexSimpleName(l *lexer) stateFn {
 	for {
 		if !isAlphaNum(l.next()) {
+			l.backup()
+			name := l.token()
+			l.emit(itemReadParam(name))
+			l.ignore()
+			return lexText
+		}
+	}
+}
+
+func lexNumberName(l *lexer) stateFn {
+	for {
+		if !isNum(l.next()) {
 			l.backup()
 			name := l.token()
 			l.emit(itemReadParam(name))
